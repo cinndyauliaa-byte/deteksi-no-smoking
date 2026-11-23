@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deteksi Area No Smoking - Logika Boolean</title>
+<style>
+  body{margin:0;font-family:Arial,sans-serif;background:#fdf6e9;color:#222}
+  header{background:#e89b25;color:#fff;text-align:center;padding:16px 10px}
+  header h1{margin:0;font-size:22px}
+  header p{margin:4px 0 0;font-size:14px}
+  main{max-width:760px;margin:0 auto;padding:14px}
+  .box{background:#fff;border-radius:10px;padding:12px;margin-bottom:12px;box-shadow:0 1px 4px #0002}
+  #wrap{position:relative;width:100%;max-width:640px;margin:0 auto;background:#000;border-radius:8px;overflow:hidden}
+  canvas{width:100%;display:block}
+  #banner{display:none;position:absolute;left:0;right:0;bottom:0;background:#d62828;color:#fff;text-align:center;padding:10px;font-weight:bold}
+  button{background:#e89b25;color:#fff;border:0;border-radius:6px;padding:10px 18px;font-size:16px;cursor:pointer}
+  button:disabled{opacity:.6;cursor:default}
+  .row{display:flex;justify-content:space-between;margin:4px 0;font-size:15px}
+  .on{color:#0a7d2c;font-weight:bold}.off{color:#999}
+  label{display:block;margin-top:8px;font-size:14px}
+  input[type=range]{width:100%}
+  table{border-collapse:collapse;width:100%;font-size:13px;text-align:center}
+  td,th{border:1px solid #ccc;padding:3px}
+  .alarm{background:#fcdcdc;font-weight:bold}
+  small{color:#555}
+  #msg{text-align:center;font-size:14px;margin:8px 0;min-height:18px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Sistem Deteksi Aktivitas di Area No Smoking</h1>
+  <p>Penerapan Logika Boolean: ALARM = P ∧ Q ∧ R ∧ S</p>
+</header>
+<main>
+  <div class="box">
+    <p><small>Izinkan akses kamera saat diminta. Video diproses di browser kamu dan tidak dikirim ke server mana pun. Butuh internet saat pertama kali memuat model.</small></p>
+    <div style="text-align:center"><button id="btn">Mulai Kamera</button></div>
+    <div id="msg"></div>
+    <div id="wrap">
+      <canvas id="c" width="640" height="480"></canvas>
+      <div id="banner">!!! DILARANG MEROKOK DI AREA INI !!!</div>
+    </div>
+  </div>
+
+  <div class="box">
+    <div class="row"><span>P : Tangan terdeteksi</span><span id="p" class="off">0</span></div>
+    <div class="row"><span>Q : Wajah terdeteksi</span><span id="q" class="off">0</span></div>
+    <div class="row"><span>R : Jari dekat mulut</span><span id="r" class="off">0</span></div>
+    <div class="row"><span>S : Konfirmasi frame</span><span id="s" class="off">0 (0/10)</span></div>
+    <div class="row"><span>Rasio jarak</span><span id="rasio">-</span></div>
+    <div class="row"><b>STATUS</b><b id="status">AMAN</b></div>
+    <label>Threshold rasio: <b id="thv">0.25</b>
+      <input type="range" id="th" min="0.05" max="0.6" step="0.01" value="0.25"></label>
+    <label>Frame konfirmasi: <b id="frv">10</b>
+      <input type="range" id="fr" min="1" max="30" step="1" value="10"></label>
+  </div>
+
+  <div class="box">
+    <b>Tabel Kebenaran</b>
+    <table id="tt"><tr><th>P</th><th>Q</th><th>R</th><th>S</th><th>ALARM</th></tr></table>
+  </div>
+
+  <div class="box"><small>Keterbatasan: sistem mendeteksi tangan yang dekat dengan mulut, bukan rokok secara langsung, sehingga aktivitas lain seperti minum atau makan dapat memicu alarm.</small></div>
+</main>
+
+<script type="module">
+import {FilesetResolver,HandLandmarker,FaceLandmarker,DrawingUtils}
+  from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/vision_bundle.mjs";
+
+const $=id=>document.getElementById(id);
+
+// Tabel kebenaran
+for(const p of [1,0])for(const q of [1,0])for(const r of [1,0])for(const s of [1,0]){
+  const a=p&&q&&r&&s?1:0;
+  $('tt').insertAdjacentHTML('beforeend',`<tr class="${a?'alarm':''}"><td>${p}</td><td>${q}</td><td>${r}</td><td>${s}</td><td>${a}</td></tr>`);
+}
+
+const video=document.createElement('video');
+video.playsInline=true;video.muted=true;
+const canvas=$('c'),ctx=canvas.getContext('2d');
+const draw=new DrawingUtils(ctx);
+let threshold=0.25,konfirmasi=10,hitung=0,handLM=null,faceLM=null,lastT=-1;
+
+$('th').oninput=e=>{threshold=+e.target.value;$('thv').textContent=threshold.toFixed(2)};
+$('fr').oninput=e=>{konfirmasi=+e.target.value;$('frv').textContent=konfirmasi};
+
+const dist=(a,b)=>Math.hypot(a.x-b.x,a.y-b.y);
+function setFlag(id,v,extra){const e=$(id);e.textContent=(v?1:0)+(extra||'');e.className=v?'on':'off'}
+
+function loop(){
+  const W=canvas.width,H=canvas.height;
+  if(video.currentTime!==lastT){
+    lastT=video.currentTime;
+    const t=performance.now();
+    handLM=handDet.detectForVideo(video,t).landmarks;
+    faceLM=faceDet.detectForVideo(video,t).faceLandmarks;
+  }
+
+  ctx.save();ctx.scale(-1,1);ctx.translate(-W,0);
+  ctx.drawImage(video,0,0,W,H);
+  const P=!!(handLM&&handLM.length);
+  const Q=!!(faceLM&&faceLM.length);
+  if(P)for(const h of handLM)draw.drawConnectors(h,HandLandmarker.HAND_CONNECTIONS,{color:'#00ff88',lineWidth:2});
+
+  let R=false,rasio=null;
+  if(P&&Q){
+    const f=faceLM[0];
+    const sc=l=>({x:l.x*W,y:l.y*H});
+    const m1=sc(f[13]),m2=sc(f[14]);
+    const mulut={x:(m1.x+m2.x)/2,y:(m1.y+m2.y)/2};
+    const lebar=dist(sc(f[234]),sc(f[454]));
+    let jmin=Infinity;
+    for(const h of handLM)for(const i of [8,12])jmin=Math.min(jmin,dist(sc(h[i]),mulut));
+    if(lebar>0){rasio=jmin/lebar;R=rasio<threshold}
+    ctx.fillStyle='#00ff00';ctx.beginPath();ctx.arc(mulut.x,mulut.y,5,0,7);ctx.fill();
+  }
+  ctx.restore();
+
+  hitung=(P&&Q&&R)?hitung+1:0;
+  const S=hitung>=konfirmasi;
+  const ALARM=P&&Q&&R&&S;
+
+  setFlag('p',P);setFlag('q',Q);setFlag('r',R);
+  setFlag('s',S,` (${Math.min(hitung,konfirmasi)}/${konfirmasi})`);
+  $('rasio').textContent=rasio===null?'-':rasio.toFixed(2);
+  $('status').textContent=ALARM?'MEROKOK!':'AMAN';
+  $('status').style.color=ALARM?'#d62828':'#0a7d2c';
+  $('banner').style.display=ALARM?'block':'none';
+
+  requestAnimationFrame(loop);
+}
+
+let handDet,faceDet;
+$('btn').onclick=async()=>{
+  $('btn').disabled=true;
+  try{
+    $('msg').textContent='Memuat model, mohon tunggu...';
+    const fileset=await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm");
+    handDet=await HandLandmarker.createFromOptions(fileset,{
+      baseOptions:{modelAssetPath:"https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"},
+      runningMode:"VIDEO",numHands:2,minHandDetectionConfidence:0.6});
+    faceDet=await FaceLandmarker.createFromOptions(fileset,{
+      baseOptions:{modelAssetPath:"https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task"},
+      runningMode:"VIDEO",numFaces:1,minFaceDetectionConfidence:0.6});
+    $('msg').textContent='Menyalakan kamera...';
+    const stream=await navigator.mediaDevices.getUserMedia({video:{width:640,height:480},audio:false});
+    video.srcObject=stream;await video.play();
+    $('msg').textContent='';$('btn').textContent='Kamera Aktif';
+    loop();
+  }catch(e){
+    console.error(e);
+    $('msg').textContent='Terjadi error: '+e.message+' (tekan F12 lalu lihat tab Console)';
+    $('btn').disabled=false;
+  }
+};
+</script>
+</body>
+</html>
